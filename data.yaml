@@ -1,0 +1,7 @@
+path: /media/neaucs2/lsw/DATA/datasets/A6GZ1400
+train: /media/neaucs2/lsw/DATA/datasets/A6GZ1400/images/train
+val: /media/neaucs2/lsw/DATA/datasets/A6GZ1400/images/val
+test: /media/neaucs2/lsw/DATA/datasets/A6GZ1400/images/test # test images (optional)
+nc: 7 # number of classes
+names: ["Z1L2W1","Z2L2W1","Z3L3W1","Z3L2W1","Z3L1W1","Z3L3W3","Z3L3W2"]
+
