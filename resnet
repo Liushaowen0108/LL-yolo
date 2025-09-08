@@ -1,0 +1,282 @@
+# 34
+import torch
+import torch.nn as nn
+from torchvision import models
+
+def get_resnet34(num_classes):
+    # 加载官方预训练 ResNet-34
+    model = models.resnet34(pretrained=True)
+    
+    # 修改最后一层全连接输出以匹配类别数
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    
+    return model
+
+# 测试模型结构
+if __name__ == "__main__":
+    num_classes = 7  # 替换为你的数据集类别数
+    model = get_resnet34(num_classes)
+    print(model)
+    print(f"Number of parameters: {sum(p.numel() for p in model.parameters()):,}")
+#train
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms, models
+from torch.utils.data import DataLoader
+import numpy as np
+from thop import profile
+
+# ----------------------------
+# 配置参数
+# ----------------------------
+data_root = "/media/neaucs2/lsw/DATA/datasets/resnet/images"
+train_dir = os.path.join(data_root, "train")
+val_dir = os.path.join(data_root, "val")
+num_classes = 7
+batch_size = 32
+num_epochs = 100
+learning_rate = 0.001
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 修改保存路径以区分ResNet-34
+save_dir = "/home/neaucs2/usr/lsw2/YOLO-20241007/runs/A6GZ1400/NEW/duibi/resnet-34/2"
+os.makedirs(save_dir, exist_ok=True)
+
+# ----------------------------
+# 数据增强与加载
+# ----------------------------
+transform_train = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+transform_val = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+train_dataset = datasets.ImageFolder(train_dir, transform=transform_train)
+val_dataset = datasets.ImageFolder(val_dir, transform=transform_val)
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+# 获取类别信息
+class_names = train_dataset.classes
+print(f"Class names: {class_names}")
+print(f"Number of classes: {num_classes}")
+
+# ----------------------------
+# 定义模型 - 修改为ResNet-34
+# ----------------------------
+model = models.resnet34(pretrained=True)
+num_features = model.fc.in_features
+model.fc = nn.Linear(num_features, num_classes)
+model = model.to(device)
+
+print(f"Using model: ResNet-34")
+print(f"Number of parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+def calculate_metrics(true_labels, predictions, num_classes):
+    """
+    按照提供的公式计算准确率、召回率、精确率和F1分数
+    """
+    # 初始化混淆矩阵
+    confusion_matrix = np.zeros((num_classes, num_classes), dtype=int)
+    
+    for true, pred in zip(true_labels, predictions):
+        confusion_matrix[true][pred] += 1
+    
+    # 计算每个类别的TP, TN, FP, FN
+    metrics_per_class = []
+    for i in range(num_classes):
+        TP = confusion_matrix[i, i]
+        FP = np.sum(confusion_matrix[:, i]) - TP
+        FN = np.sum(confusion_matrix[i, :]) - TP
+        TN = np.sum(confusion_matrix) - TP - FP - FN
+        
+        # 计算各项指标
+        accuracy = (TP + TN) / (TP + TN + FP + FN) if (TP + TN + FP + FN) > 0 else 0
+        recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+        precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        metrics_per_class.append({
+            'class': i,
+            'TP': TP, 'TN': TN, 'FP': FP, 'FN': FN,
+            'accuracy': accuracy,
+            'recall': recall,
+            'precision': precision,
+            'f1_score': f1_score
+        })
+    
+    # 计算宏平均 - 修正F1计算方式
+    macro_accuracy = np.mean([m['accuracy'] for m in metrics_per_class])
+    macro_recall = np.mean([m['recall'] for m in metrics_per_class])
+    macro_precision = np.mean([m['precision'] for m in metrics_per_class])
+    
+    # 关键修正：使用宏平均的Precision和Recall计算宏F1
+    macro_f1 = 2 * macro_precision * macro_recall / (macro_precision + macro_recall) if (macro_precision + macro_recall) > 0 else 0
+    
+    # 同时也计算每个类F1的平均值（用于对比）
+    macro_f1_alternative = np.mean([m['f1_score'] for m in metrics_per_class])
+    
+    return {
+        'confusion_matrix': confusion_matrix,
+        'per_class': metrics_per_class,
+        'macro_accuracy': macro_accuracy,
+        'macro_recall': macro_recall,
+        'macro_precision': macro_precision,
+        'macro_f1': macro_f1,  # 使用宏平均计算
+        'macro_f1_avg': macro_f1_alternative  # 每个类F1的平均值
+    }
+
+# ----------------------------
+# 损失函数与优化器
+# ----------------------------
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+# ----------------------------
+# 训练与验证
+# ----------------------------
+print(f"\n{'Starting training ResNet-34...':^80}")
+print(f"{'Epoch':>8} {'GPU_mem':>8} {'Train_Loss':>10} {'Train_Acc':>10} {'Val_Loss':>10} {'Val_Acc':>10} {'Recall':>10}")
+print(f"{'':-<80}")
+
+best_val_acc = 0.0
+best_epoch = 0
+
+for epoch in range(1, num_epochs + 1):
+    # -------- 训练阶段 --------
+    model.train()
+    running_loss = 0.0
+    train_all_labels = []
+    train_all_preds = []
+    
+    for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * inputs.size(0)
+        _, predicted = outputs.max(1)
+        train_all_labels.extend(labels.cpu().numpy())
+        train_all_preds.extend(predicted.cpu().numpy())
+
+    train_loss = running_loss / len(train_loader.dataset)
+    train_metrics = calculate_metrics(train_all_labels, train_all_preds, num_classes)
+    train_acc = train_metrics['macro_accuracy']
+    train_recall = train_metrics['macro_recall']
+
+    # -------- 验证阶段 --------
+    model.eval()
+    val_running_loss = 0.0
+    val_all_labels = []
+    val_all_preds = []
+    
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            val_running_loss += loss.item() * inputs.size(0)
+            _, predicted = outputs.max(1)
+            val_all_labels.extend(labels.cpu().numpy())
+            val_all_preds.extend(predicted.cpu().numpy())
+
+    val_loss = val_running_loss / len(val_loader.dataset)
+    val_metrics = calculate_metrics(val_all_labels, val_all_preds, num_classes)
+    val_acc = val_metrics['macro_accuracy']
+    val_recall = val_metrics['macro_recall']
+
+    # 保存最佳模型
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        best_epoch = epoch
+        torch.save(model.state_dict(), os.path.join(save_dir, "best_model.pth"))
+
+    # 输出训练进度（正确显示百分比）
+    gpu_mem = f'{torch.cuda.memory_allocated()/1e9:.1f}G' if torch.cuda.is_available() else '0G'
+    print(f'{epoch:>8} {gpu_mem:>8} {train_loss:>10.4f} {train_acc*100:>9.2f}% {val_loss:>10.4f} {val_acc*100:>9.2f}% {val_recall:>10.4f}')
+
+# ----------------------------
+# 训练完成后的最终输出
+# ----------------------------
+print(f"{'':-<80}")
+print(f"{'Training completed':^80}")
+print(f"{'':-<80}")
+
+# 保存最终模型并计算复杂度
+final_model_path = os.path.join(save_dir, "final_model.pth")
+torch.save(model.state_dict(), final_model_path)
+
+dummy_input = torch.randn(1, 3, 224, 224).to(device)
+flops, params = profile(model, inputs=(dummy_input,), verbose=False)
+model_size_mb = os.path.getsize(final_model_path) / (1024 ** 2)
+
+# 最终验证集性能
+final_val_metrics = calculate_metrics(val_all_labels, val_all_preds, num_classes)
+
+print(f"{'Best val accuracy:':<20} {best_val_acc*100:.2f}% at epoch {best_epoch}")
+print(f"{'Final val accuracy:':<20} {final_val_metrics['macro_accuracy']*100:.2f}%")
+print(f"{'Final val recall:':<20} {final_val_metrics['macro_recall']:.4f}")
+print(f"{'Final val precision:':<20} {final_val_metrics['macro_precision']:.4f}")
+print(f"{'Final val F1-score:':<20} {final_val_metrics['macro_f1']:.4f}")
+print(f"{'Model size:':<20} {model_size_mb:.1f} MB")
+print(f"{'Params:':<20} {params:,.0f}")
+print(f"{'GFLOPs:':<20} {flops/1e9:.1f}")
+print(f"{'':-<80}")
+
+# 保存详细结果
+with open(os.path.join(save_dir, "detailed_results.txt"), "w") as f:
+    f.write("="*60 + " ResNet-34 Detailed Results " + "="*60 + "\n")
+    f.write(f"{'Best val accuracy:':<25} {best_val_acc*100:.2f}% at epoch {best_epoch}\n")
+    f.write(f"{'Final val accuracy:':<25} {final_val_metrics['macro_accuracy']*100:.2f}%\n")
+    f.write(f"{'Final val recall:':<25} {final_val_metrics['macro_recall']:.4f}\n")
+    f.write(f"{'Final val precision:':<25} {final_val_metrics['macro_precision']:.4f}\n")
+    f.write(f"{'Final val F1-score:':<25} {final_val_metrics['macro_f1']:.4f}\n\n")
+    
+    f.write("Per-class metrics:\n")
+    for metric in final_val_metrics['per_class']:
+        f.write(f"Class {metric['class']} ({class_names[metric['class']]}): "
+                f"Acc={metric['accuracy']:.4f}, Rec={metric['recall']:.4f}, "
+                f"Prec={metric['precision']:.4f}, F1={metric['f1_score']:.4f}\n")
+    
+    f.write(f"\nConfusion Matrix:\n{final_val_metrics['confusion_matrix']}\n")
+    f.write(f"\nModel size: {model_size_mb:.1f} MB\n")
+    f.write(f"Params: {params:,.0f}\n")
+    f.write(f"GFLOPs: {flops/1e9:.1f}\n")
+
+print(f"Detailed results saved to {os.path.join(save_dir, 'detailed_results.txt')}")
+
+#50
+                                    import torch
+import torch.nn as nn
+from torchvision import models
+
+def get_resnet50(num_classes):
+    # 加载官方预训练 ResNet-50
+    model = models.resnet50(pretrained=True)
+    
+    # 修改最后一层全连接输出以匹配类别数
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    
+    return model
+
+# 测试模型结构
+if __name__ == "__main__":
+    num_classes = 5  # 替换为你的数据集类别数
+    model = get_resnet50(num_classes)
+    print(model)
+
+
